@@ -1,0 +1,439 @@
+#include "AlVdTrackFinderSG.h"
+#include "Na61VdParametersManager.h"
+#include "Na61VdParameters.h"
+#include "Na61AlVdArmParameters.h"
+#include "Na61AlPrimaryVertexRecoModule.h"
+#include "Na61AlVdTrackingHTModule.h"
+#include "Na61PrimaryVertexRecoHTModule.h"
+#include "Na61AlVdTrackingHTPackage.h"
+#include "Na61VdTpcMatchingModule.h"
+#include "UDataTable.h"
+#include "USensorHit.h"
+#include <fwk/CentralConfig.h>
+#include <utl/Branch.h>
+#include <utl/ErrorLogger.h>
+#include <utl/ShineUnits.h>
+#include <utl/PhysicalConst.h>
+#include <evt/Event.h>
+#include <det/MagneticField.h>
+#include <det/Detector.h>
+#include <evt/RecEvent.h>
+#include <evt/proc/Silicon.h>
+#include <evt/raw/Silicon.h>
+#include <evt/IndexedObjectLinker.h>
+#include <sstream>
+
+//#include "XeLa150EventCuts.h"
+
+namespace AlVdTrackFinderSG {
+fwk::VModule::EResultFlag AlVdTrackFinderSG::Init() {
+
+  utl::Branch vdReconstructoinSGXML =
+    fwk::CentralConfig::GetInstance().GetTopBranch("VdReconstructionSG");
+  InitVerbosity(vdReconstructoinSGXML);
+
+  vdReconstructoinSGXML.GetChild("matchParamsPath").GetData(fMatchParamsPath);
+  char fullpath[PATH_MAX];
+  if (not realpath(fMatchParamsPath.c_str(), fullpath)) {
+    ERROR(Form("Invalid path to match-params (%s)", fMatchParamsPath.c_str()));
+    throw utl::XMLValidationException {"invalid value of an entry"};
+  }
+  fMatchParamsPath = fullpath;
+
+  utl::Branch vdTrackFinderSGXML =
+    vdReconstructoinSGXML.GetChild("VdTrackFinderSG");
+  vdTrackFinderSGXML.GetChild("doEventCuts").GetData(fDoEventCuts);
+  vdTrackFinderSGXML.GetChild("histogramsPath").GetData(fHistosPath);
+  if (fHistosPath.empty()) {
+    ERROR("Please fill in the <histogramsPath>...</histogramsPath> element inside <AlVdTrackFinderSG>...</AlVdTrackFinderSG>");
+    throw utl::XMLValidationException {"mandatory element not specified"};
+  }
+
+  prevRun = 0;
+  productionMode=1;//should be 1 for productions and 0 for calculating efficiencies and parameters tuning
+  return eSuccess;
+}
+
+//____________________________________________________________________________________________________________________________________
+
+fwk::VModule::EResultFlag AlVdTrackFinderSG::Process(evt::Event& e, const utl::AttributeMap&) {
+  const evt::EventHeader& eventHeader = e.GetEventHeader();
+  if (!eventHeader.IsInitialized()) {
+    WARNING("No EventHeader is present in Event. This is a serious problem!!! PLEASE DO CHECK WHAT IS GOING ON IF THIS EFFECT IS NOT EXPECTED!!!");
+    return eFailure;
+  }
+  det::Detector::GetInstance().Update(eventHeader.GetTime(), eventHeader.GetRunNumber());
+
+  if (eventHeader.GetRunNumber() != prevRun) {
+    Begin(eventHeader.GetRunNumber(), e.IsSimulation());
+    prevRun = eventHeader.GetRunNumber();
+  }
+
+  // XXX: Can we avoid these "event cuts" at all? (we are doing reconstruction;
+  //      its a job of analyzer to perform these cuts)
+  /* 
+ if (fDoEventCuts) {
+    enum det::TriggerConst::EId triggerID = det::TriggerConst::eT2;
+    if (XeLa150EventCuts(e, triggerID) == false) {
+      INFO("Event does not pass event cuts");
+      return eSuccess;
+    }
+  }
+  */
+
+  const std::string nameStandalone[34] = {
+    "Hits Al1_0", "Hits Al1_1", "Hits Al1_2",
+    "Hits Al2_0", "Hits Al2_1", "Hits Al2_2",  "Hits Al2_3", "Hits Al2_4", "Hits Al2_5",
+    "Hits Al3_0", "Hits Al3_1", "Hits Al3_2", "Hits Al3_3", "Hits Al3_4",
+    "Hits Al3_5", "Hits Al3_6", "Hits Al3_7", "Hits Al3_8", "Hits Al3_9",
+    "Hits Al4_0", "Hits Al4_1", "Hits Al4_2", "Hits Al4_3", "Hits Al4_4",
+    "Hits Al4_5", "Hits Al4_6", "Hits Al4_7", "Hits Al4_8", "Hits Al4_9",
+    "Hits Al4_10","Hits Al4_11","Hits Al4_12","Hits Al4_13","Hits Al4_14"
+  };
+  const std::string nameShine[2][34] = {
+    {"vds1_0", "vds1_1", "vds1_2", 
+     "vds2_0", "vds2_1", "vds2_2", "vds2_3", "vds2_4", "vds2_5",
+     "vds3_0", "vds3_1", "vds3_2", "vds3_3", "vds3_4", "vds3_5", "vds3_6", "vds3_7", "vds3_8", "vds3_9",
+     "vds4_0", "vds4_1", "vds4_2", "vds4_3", "vds4_4", "vds4_5", "vds4_6", "vds4_7", "vds4_8", "vds4_9",
+     "vds4_10","vds4_11","vds4_12","vds4_13","vds4_14"
+    },
+    {"vdj1_0", "vdj1_1", "vdj1_2", 
+     "vdj2_0", "vdj2_1", "vdj2_2", "vdj2_3", "vdj2_4", "vdj2_5",
+     "vdj3_0", "vdj3_1", "vdj3_2", "vdj3_3", "vdj3_4", "vdj3_5", "vdj3_6", "vdj3_7", "vdj3_8", "vdj3_9",
+     "vdj4_0", "vdj4_1", "vdj4_2", "vdj4_3", "vdj4_4", "vdj4_5", "vdj4_6", "vdj4_7", "vdj4_8", "vdj4_9",
+     "vdj4_10","vdj4_11","vdj4_12","vdj4_13","vdj4_14"
+    }
+  };
+
+
+  // Create events
+  UVdEvent event;
+  event.SetOwner();
+  //UVdEvent eventArm[2];
+
+  eventArm[0].Clear();
+  eventArm[1].Clear();
+  
+  
+  // Loop over Saleve and Jura arms
+  for (unsigned char arm = 0; arm < 2; arm++) {
+    eventArm[arm].SetOwner();
+    // Loop over senors of each arm
+    for (unsigned char armSensor = 0; armSensor < 34; armSensor++) {
+      UDataTable& hits = *new UDataTable(nameStandalone[armSensor].c_str());
+      eventArm[arm].AddDataTable(&hits);
+
+      const det::Silicon &detSilicon = det::Detector::GetInstance().GetSilicon();
+      const det::SiliconSensor &detSensor =
+        detSilicon.GetSensor(detSilicon.SensorIdToSubdetectorNumber(nameShine[arm][armSensor]));
+
+      if (!e.GetProcEvent().GetSilicon().HasSensor(detSensor.GetSubdetectorNumber())) continue;
+      const evt::proc::SiliconSensor& sensor = e.GetProcEvent().GetSilicon().GetSensor(detSensor.GetSubdetectorNumber());
+      // Loop over clusters of each sensor (of each arm) and add them to list of hits
+      for (auto cluster = sensor.GetClusters().begin(); cluster != sensor.GetClusters().end(); cluster++) {
+        if (!e.GetRecEvent().Has(*cluster)) continue;
+        if (e.GetProcEvent().GetSilicon().GetClusterLocalPositions().find(e.GetRecEvent().Get(*cluster).GetIndex()) == e.GetProcEvent().GetSilicon().GetClusterLocalPositions().end()) continue;
+        const utl::Point& localPosition = e.GetProcEvent().GetSilicon().GetClusterLocalPositions()[e.GetRecEvent().Get(*cluster).GetIndex()];
+        USensorHit& hit = *new USensorHit(localPosition.GetX() * 10, localPosition.GetY() * 10, localPosition.GetZ() * 10, e.GetRecEvent().Get(*cluster).GetNumberOfPixels());  // Positions in mm
+        hit.SetSensorName(nameStandalone[armSensor].c_str());
+        hit.SetClusterLine(e.GetRecEvent().Get(*cluster).GetFirstCoordinateNumber());
+        hit.SetClusterColumn(e.GetRecEvent().Get(*cluster).GetSecondCoordinateNumber());
+        hit.SetIndex(e.GetRecEvent().Get(*cluster).GetIndex());
+        hits.Add(&hit);
+      }
+    }
+    // Call event processing fuctions of stand-alone modules
+    na61AlVdTrackingInitModule[arm]->Event(&eventArm[arm], &eventArm[arm]);
+    if (!eventArm[arm].GetPrimaryVertexStatus()) eventArm[arm].SetPrimaryVertex(-11111, -11111, -11111);
+  }
+  
+  na61PrimaryVertexRecoModule->Event(&eventArm[1], &eventArm[0]);
+  event.SetRunNumber(eventArm[1].GetRunNumber());
+  event.SetEventNumber(eventArm[1].GetEventNumber());
+  event.SetPrimaryVertexStatus(0);
+  if (eventArm[0].GetPrimaryVertexStatus() || eventArm[1].GetPrimaryVertexStatus()) {
+    event.SetPrimaryVertex(na61PrimaryVertexRecoModule->GetPrimaryVertex().GetX(), na61PrimaryVertexRecoModule->GetPrimaryVertex().GetY(), na61PrimaryVertexRecoModule->GetPrimaryVertex().GetZ());
+    if (abs(na61PrimaryVertexRecoModule->GetPrimaryVertex().GetZ() + 70.) < 3.) event.SetPrimaryVertexStatus(1);
+  }
+  //.GetZ() + 47. <- OLD ONE
+
+  WARNING("-----productionMode=1----- data used for production");
+  na61AlVdTrackingHTModule->Event(&eventArm[1], &eventArm[0], &event);
+  na61PrimaryVertexRecoHTModule->Event(&eventArm[1], &eventArm[0], &event);
+  na61AlVdTrackingHTPackage->Event(&eventArm[1], &eventArm[0], &event);
+  if (!e.GetRecEvent().HasMainVertex())
+	WARNING("No Main Vertex! Check this out!");
+  else{
+    na61VdTpcMatchingModule->Event(det::Detector::GetInstance().GetMagneticFieldTracker(), e, &eventArm[1], &eventArm[0], &event);
+    na61PrimaryVertexRecoHTModuleTPC->Event(&event);
+  }
+
+
+
+  UDataTable* tracks = event.GetDataTable("Vd HT Tracks");
+  if (!tracks) return eSuccess;
+  for (int t = 0; t < tracks->GetEntries(); t++) {
+    UVdTrack* track = (UVdTrack*)tracks->At(t);
+    if (!track) continue;
+
+    const unsigned char match = track->GetTpcMatchingFlag() && e.GetRecEvent().Has(evt::Index<evt::rec::Track>(track->GetTpcTrackIndex()));
+
+    evt::rec::Track& trackShine = match ? e.GetRecEvent().Get(evt::Index<evt::rec::Track>(track->GetTpcTrackIndex())) : e.GetRecEvent().Make<evt::rec::Track>();
+    e.GetProcEvent().GetSilicon().GetTracks().insert(trackShine.GetIndex());
+
+    unsigned int counter = 0;
+    for (unsigned char s = 0; s < 4; s++) {
+      USensorHit* hit = (USensorHit*)track->GetHitIdAtStation(s);
+      if (!hit) continue;
+      const evt::Index<evt::rec::Cluster> cluster(hit->GetIndex());
+      if (!e.GetRecEvent().Has(cluster)) continue;
+      try {
+        evt::IndexedObjectLinker::LinkDaughterToParent(e.GetRecEvent().Get(cluster), trackShine);
+      } catch (const utl::EventIndexException& error) {
+      }
+      ++counter;
+    }
+    trackShine.SetNumberOfClusters(evt::rec::TrackConst::eVD, counter);
+    trackShine.SetNumberOfClusters(evt::rec::TrackConst::eAll, counter + trackShine.GetNumberOfClusters(evt::rec::TrackConst::eAll));
+    // trackShine.SetPotentialNumberOfClusters(evt::rec::TrackConst::eVD, counter);
+    // trackShine.SetPotentialNumberOfClusters(evt::rec::TrackConst::eAll, counter+trackShine.GetPotentialNumberOfClusters(evt::rec::TrackConst::eAll));
+
+    std::map<double, evt::Index<evt::rec::Cluster> > clusters;
+    for (auto cluster = trackShine.ClustersBegin(); cluster != trackShine.ClustersEnd(); cluster++) clusters[e.GetRecEvent().Get(*cluster).GetPosition().GetZ()] = *cluster;
+
+//    evt::rec::VertexTrack& vertexTrackShine = (match && trackShine.GetNumberOfVertexTracks()) ? e.GetRecEvent().Get(*trackShine.VertexTracksBegin()) : e.GetRecEvent().Make<evt::rec::VertexTrack>();
+//    e.GetProcEvent().GetSilicon().GetVertexTracks().insert(vertexTrackShine.GetIndex());
+
+/*    if (!match) {
+      try {
+        evt::IndexedObjectLinker::LinkDaughterToParent(trackShine, vertexTrackShine);
+      } catch (const utl::EventIndexException& error) {
+      }
+    }
+    if (!trackShine.GetNumberOfVertexTracks()) {
+      try {
+        evt::IndexedObjectLinker::LinkDaughterToParent(e.GetRecEvent().GetMainVertex(), vertexTrackShine);
+      } catch (const utl::EventIndexException& error) {
+      }
+    }
+*/
+    if (clusters.size()) {
+      trackShine.SetFirstPointOnTrack(e.GetRecEvent().Get(clusters.begin()->second).GetPosition());
+      trackShine.SetLastPointOnTrack(e.GetRecEvent().Get(clusters.rbegin()->second).GetPosition());
+
+      evt::Index<evt::rec::Cluster> previous = clusters.begin()->second;
+      double length = 0;
+      for (auto cluster = clusters.begin(); cluster != clusters.end(); cluster++) {
+        length += (e.GetRecEvent().Get(cluster->second).GetPosition() - e.GetRecEvent().Get(previous).GetPosition()).GetMag();
+        previous = cluster->second;
+      }
+      //vertexTrackShine.SetPathLength(length);
+      // vertexTrackShine.SetPotentialNumberOfClusters(evt::rec::TrackConst::eVD, counter);
+      // vertexTrackShine.SetPotentialNumberOfClusters(evt::rec::TrackConst::eAll, counter+vertexTrackShine.GetPotentialNumberOfClusters(evt::rec::TrackConst::eAll));
+
+      trackShine.SetNumberOfFitClusters(evt::rec::TrackConst::eVD, counter);
+      //vertexTrackShine.SetNumberOfFitClusters(clusters.size());
+
+      if (track->GetFitKf()) {
+        trackShine.SetMomentum(track->GetMomentumKf());
+        trackShine.SetMomentumPoint(track->GetPositionKf());
+        trackShine.SetCharge(track->GetChargeKf());
+
+      //  vertexTrackShine.SetMomentum(track->GetMomentumKf());
+      //  vertexTrackShine.SetImpactPoint(track->GetPositionKf());
+      //  vertexTrackShine.SetCharge(track->GetChargeKf());
+      } else {
+        trackShine.SetMomentum(utl::Vector(track->GetTLV()->Px(), track->GetTLV()->Py(), track->GetTLV()->Pz()));
+        trackShine.SetMomentumPoint(trackShine.GetFirstPointOnTrack());
+        trackShine.SetCharge(track->GetCharge());
+
+       // vertexTrackShine.SetMomentum(utl::Vector(track->GetTLV()->Px(), track->GetTLV()->Py(), track->GetTLV()->Pz()));
+       // vertexTrackShine.SetImpactPoint(trackShine.GetFirstPointOnTrack());
+       // vertexTrackShine.SetCharge(track->GetCharge());
+      }
+      e.GetProcEvent().GetSilicon().GetTrackLocalPositions()[trackShine.GetIndex()] = utl::Line(utl::Point(track->GetX_f(), track->GetY_f(), track->GetZ_f()), utl::Vector(track->GetDX_f(), track->GetDY_f(), track->GetDZ_f()));
+      e.GetProcEvent().GetSilicon().GetTrackLocalCurvatures()[trackShine.GetIndex()] = track->GetCurvature();
+      for(auto hit=trackShine.ClustersBegin(); hit!=trackShine.ClustersEnd(); hit++){
+        if(!e.GetRecEvent().Has(*hit)) continue;
+        if(e.GetRecEvent().Get(*hit).GetTPCId()!=det::TPCConst::eVD) continue;
+        if(e.GetProcEvent().GetSilicon().GetTrackFirstStations().find(trackShine.GetIndex())==e.GetProcEvent().GetSilicon().GetTrackFirstStations().end() ||
+          det::Detector::GetInstance().GetSilicon().GetSensor(e.GetRecEvent().Get(*hit).GetSubdetectorNumber()).GetStation() < e.GetProcEvent().GetSilicon().GetTrackFirstStations()[trackShine.GetIndex()])
+//if(det::Detector::GetInstance().GetSilicon().GetSensor(e.GetRecEvent().Get(*hit).GetSubdetectorNumber()).GetStation() < e.GetProcEvent().GetSilicon().GetTrackFirstStations()[trackShine.GetIndex()])
+          e.GetProcEvent().GetSilicon().GetTrackFirstStations()[trackShine.GetIndex()] = det::Detector::GetInstance().GetSilicon().GetSensor(e.GetRecEvent().Get(*hit).GetSubdetectorNumber()).GetStation();
+              // std::cout<<"e.GetProcEvent().GetSilicon().GetTrackFirstStations()[trackShine.GetIndex()]="<<(int)e.GetProcEvent().GetSilicon().GetTrackFirstStations()[trackShine.GetIndex()]<<std::endl;
+
+      }
+    }
+
+    if (na61PrimaryVertexRecoHTModule->GetPrimaryVertexStatus()) {
+      evt::rec::Vertex& vertex = e.GetRecEvent().Make<evt::rec::Vertex>();
+      vertex.SetPosition(utl::Point((na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetX() + Na61VdParametersManager::Instance()->GetVdParams()->GetOffsetToTpcX()) * 0.1, (na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetY() + Na61VdParametersManager::Instance()->GetVdParams()->GetOffsetToTpcY()) * 0.1, (na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetZ() + Na61VdParametersManager::Instance()->GetVdParams()->GetOffsetToTpcZ()) * 0.1));
+      e.GetRecEvent().SetPrimaryVertexIndex(evt::rec::VertexConst::ePrimaryVD, vertex.GetIndex());
+      e.GetProcEvent().GetSilicon().GetVertexLocalPositions()[vertex.GetIndex()] = utl::Point(na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetX(), na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetY(), na61PrimaryVertexRecoHTModule->GetPrimaryVertex().GetZ());
+    }
+    if (na61PrimaryVertexRecoHTModuleTPC->GetPrimaryVertexStatus()) {
+      evt::rec::Vertex& vertex = e.GetRecEvent().Make<evt::rec::Vertex>();
+      vertex.SetPosition(utl::Point(na61PrimaryVertexRecoHTModuleTPC->GetPrimaryVertex().GetX(), na61PrimaryVertexRecoHTModuleTPC->GetPrimaryVertex().GetY(), na61PrimaryVertexRecoHTModuleTPC->GetPrimaryVertex().GetZ()));
+      e.GetRecEvent().SetPrimaryVertexIndex(evt::rec::VertexConst::eUnknown, vertex.GetIndex());
+    }
+  }
+  
+  return eSuccess;
+}
+
+  //_________________________________________________________________________________________________________
+fwk::VModule::EResultFlag AlVdTrackFinderSG::Finish() {
+  End();
+  return eSuccess;
+}
+
+  //_________________________________________________________________________________________________________
+void AlVdTrackFinderSG::Begin(const unsigned int run, bool isSim) {
+  End();
+
+  const unsigned int calibrun = Na61VdParameters::FindCalibRuns(run);
+  // XXX: delete?
+  TFile* matchParamsFile;
+  if (isSim)
+    matchParamsFile = TFile::Open(Form("%s/matchParams-0.root", fMatchParamsPath.c_str()), "READ");
+  else
+    matchParamsFile = TFile::Open(Form("%s/matchParams-%0d.root", fMatchParamsPath.c_str(), calibrun), "READ");
+
+  Na61VdParameters& na61VdParameters = *Na61VdParametersManager::Instance()->GetVdParams();
+  na61VdParameters.SetRunId(run);
+  na61VdParameters.SetMatchParamsFile(matchParamsFile);
+  na61VdParameters.SetdOffZ(0);
+  na61VdParameters.SetN(0);
+  na61VdParameters.Init();
+  matchParamsFile->Close();
+
+  Na61AlVdArmParameters& na61ArmParametersSaleve = *Na61VdParametersManager::Instance()->GetSaleveAlVdArmParams();
+  na61ArmParametersSaleve.SetRunId(run);
+  na61ArmParametersSaleve.Init();
+  na61ArmParametersSaleve.SetVolumesInGlobal(na61VdParameters.GetSaleveArmOffset().X(), na61VdParameters.GetSaleveArmOffset().Y(), na61VdParameters.GetSaleveArmOffset().Z(), na61VdParameters.GetSaleveArmRotX(), na61VdParameters.GetSaleveArmRotY(), na61VdParameters.GetSaleveArmRotZ());
+
+  Na61AlVdArmParameters& na61ArmParametersJura = *Na61VdParametersManager::Instance()->GetJuraAlVdArmParams();
+  na61ArmParametersJura.SetRunId(run);
+  na61ArmParametersJura.Init();
+  na61ArmParametersJura.SetVolumesInGlobal(na61VdParameters.GetJuraArmOffset().X(), na61VdParameters.GetJuraArmOffset().Y(), na61VdParameters.GetJuraArmOffset().Z(), na61VdParameters.GetJuraArmRotX(), na61VdParameters.GetJuraArmRotY(), na61VdParameters.GetJuraArmRotZ());
+
+  // TODO: this output file must be optional
+  fHistFile = new TFile(fHistosPath.c_str(), "recreate");
+  const std::string armNames[2] = {"Saleve", "Jura"};
+
+  for (unsigned char arm = 0; arm < 2; arm++) {
+    na61AlVdTrackingInitModule[arm] = new Na61AlVdTrackingInitModule((armNames[arm] + " Vd Tracking Module").c_str(), "Vd Tracking Module");
+    na61AlVdTrackingInitModule[arm]->SetRunId(run);
+    na61AlVdTrackingInitModule[arm]->SetCutId(0);
+    na61AlVdTrackingInitModule[arm]->SetNsig_dev(4.);
+    na61AlVdTrackingInitModule[arm]->SetNsig_pvert(5.);
+    na61AlVdTrackingInitModule[arm]->SetProductionMode(productionMode);
+    na61AlVdTrackingInitModule[arm]->SetToJuraArm(arm);
+    na61AlVdTrackingInitModule[arm]->SetHistDirName((std::string("AlVdTrackingInitModule_") + armNames[arm]).c_str());
+    na61AlVdTrackingInitModule[arm]->Init();
+    na61AlVdTrackingInitModule[arm]->DefineHistograms();
+  }
+
+  na61PrimaryVertexRecoModule = new Na61AlPrimaryVertexRecoModule("Primary Vertex reco", "Primary Vertex reco");
+  na61PrimaryVertexRecoModule->SetRunId(run);
+  na61PrimaryVertexRecoModule->Init();
+  na61PrimaryVertexRecoModule->DefineHistograms();
+  na61PrimaryVertexRecoModule->SetZPrim(72.0);
+
+  na61AlVdTrackingHTModule = new Na61AlVdTrackingHTModule("Vd Tracking HT Module", "Vd Tracking HT Module");
+  na61AlVdTrackingHTModule->SetRunId(run);
+  na61AlVdTrackingHTModule->SetProduction(1);
+  na61AlVdTrackingHTModule->SetPosRes(0.04);
+  na61AlVdTrackingHTModule->Setbw(0.0012, 0.0012);
+  na61AlVdTrackingHTModule->SetMakeClusters(1);
+  na61AlVdTrackingHTModule->SetChi2Cut(5);
+  na61AlVdTrackingHTModule->SetVzOffset(0);
+  na61AlVdTrackingHTModule->SetHistDirName("AlVdTrackingHTModule");
+  na61AlVdTrackingHTModule->SetOutTableName("Vd HT Tracks");
+  na61AlVdTrackingHTModule->SetAdd4HitTracks(true);
+  na61AlVdTrackingHTModule->Init();
+  na61AlVdTrackingHTModule->DefineHistograms();
+
+  na61PrimaryVertexRecoHTModule = new Na61PrimaryVertexRecoHTModule("Primary Vertex reco", "Primary Vertex reco");
+  na61PrimaryVertexRecoHTModule->SetRunId(run);
+  na61PrimaryVertexRecoHTModule->SetTrackInput(0);
+  na61PrimaryVertexRecoHTModule->SetZprim(47.15);
+  na61PrimaryVertexRecoHTModule->SetZCut(2.5);
+  na61PrimaryVertexRecoHTModule->Init();
+  na61PrimaryVertexRecoHTModule->DefineHistograms();
+
+  na61AlVdTrackingHTPackage = new Na61AlVdTrackingHTPackage("AlVd Tracking HT Package", "Vd Tracking HT Package");
+  na61AlVdTrackingHTPackage->SetRunId(run);
+  na61AlVdTrackingHTPackage->SetProduction(1);
+  na61AlVdTrackingHTPackage->SetPosRes(0.04);
+  na61AlVdTrackingHTPackage->Setbw(0.0012, 0.0012);
+  na61AlVdTrackingHTPackage->SetMakeClusters(1);
+  na61AlVdTrackingHTPackage->SetChi2Cut(5);
+  na61AlVdTrackingHTPackage->SetVzOffset(0);
+  na61AlVdTrackingHTPackage->Init();
+  na61AlVdTrackingHTPackage->DefineHistograms();
+
+  na61VdTpcMatchingModule = new Na61VdTpcMatchingModule("VD-TPC Matching", "VD-TPC Matching");
+  na61VdTpcMatchingModule->SetRunId(run);
+  na61VdTpcMatchingModule->Init();
+  na61VdTpcMatchingModule->DefineHistograms();
+
+  na61PrimaryVertexRecoHTModuleTPC = new Na61PrimaryVertexRecoHTModule("Primary Vertex Tpc", "Primary Vertex Tpc");
+  na61PrimaryVertexRecoHTModuleTPC->SetRunId(run);
+  na61PrimaryVertexRecoHTModuleTPC->SetTrackInput(1);
+  na61PrimaryVertexRecoHTModuleTPC->SetZprim(602.7);
+  na61PrimaryVertexRecoHTModuleTPC->SetZCut(1.7);
+  na61PrimaryVertexRecoHTModuleTPC->Init();
+  na61PrimaryVertexRecoHTModuleTPC->DefineHistograms();
+
+
+}
+
+  //______________________________________________________________________________________________
+void AlVdTrackFinderSG::End() {
+  for (unsigned char arm = 0; arm < 2; arm++) {
+    if (na61AlVdTrackingInitModule[arm]) {
+      na61AlVdTrackingInitModule[arm]->Finish();
+      delete na61AlVdTrackingInitModule[arm];
+      na61AlVdTrackingInitModule[arm] = NULL;
+    }
+  }
+  if (na61PrimaryVertexRecoModule) {
+    na61PrimaryVertexRecoModule->Finish();
+    delete na61PrimaryVertexRecoModule;
+    na61PrimaryVertexRecoModule = NULL;
+  }
+  if (na61AlVdTrackingHTModule) {
+    na61AlVdTrackingHTModule->Finish();
+    delete na61AlVdTrackingHTModule;
+    na61AlVdTrackingHTModule = NULL;
+  }
+  if (na61PrimaryVertexRecoHTModule) {
+    na61PrimaryVertexRecoHTModule->Finish();
+    delete na61PrimaryVertexRecoHTModule;
+    na61PrimaryVertexRecoHTModule = NULL;
+  }
+  if (na61AlVdTrackingHTPackage) {
+    na61AlVdTrackingHTPackage->Finish();
+    delete na61AlVdTrackingHTPackage;
+    na61AlVdTrackingHTPackage = NULL;
+  }
+  if (na61VdTpcMatchingModule) {
+    na61VdTpcMatchingModule->Finish();
+    delete na61VdTpcMatchingModule;
+    na61VdTpcMatchingModule = NULL;
+  }
+  if (na61PrimaryVertexRecoHTModuleTPC) {
+    na61PrimaryVertexRecoHTModuleTPC->Finish();
+    delete na61PrimaryVertexRecoHTModuleTPC;
+    na61PrimaryVertexRecoHTModuleTPC = NULL;
+  }
+
+  if (fHistFile) {
+    fHistFile->Write();
+    fHistFile->Close();
+    delete fHistFile;
+    fHistFile = NULL;
+  }
+}
+}

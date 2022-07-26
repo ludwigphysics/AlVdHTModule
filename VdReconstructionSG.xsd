@@ -1,0 +1,33 @@
+<xsd:schema
+  xmlns:xsd='http://www.w3.org/2001/XMLSchema'
+  xmlns:shine="http://cern.ch/na61/schema/types">
+
+  <xsd:import
+    namespace="http://cern.ch/na61/schema/types"
+    schemaLocation="[SCHEMAPATH_IMPORTS]/ShineSchemaTypes.xsd"/>
+
+  <xsd:element name="VdReconstructionSG">
+    <xsd:complexType>
+      <xsd:all>
+        <xsd:element name="matchParamsPath" type="xsd:token"/>
+        <xsd:element name="VdTrackFinderSG" type="VdTrackFinderSGType"/>
+        <xsd:element name="VdHitFinderPS" type="VdHitFinderPSType"/>
+        <xsd:element name="verbosity" type="shine:verbosityLevel" minOccurs="0"/>
+      </xsd:all>
+    </xsd:complexType>
+  </xsd:element> <!-- VdReconstructionSG -->
+
+  <xsd:complexType name="VdTrackFinderSGType">
+    <xsd:all>
+      <xsd:element name="doEventCuts" type="xsd:boolean"/>
+      <xsd:element name="histogramsPath" type="xsd:token"/>
+    </xsd:all>
+  </xsd:complexType>
+
+  <xsd:complexType name="VdHitFinderPSType">
+    <xsd:all>
+      <xsd:element name="histogramsPath" type="xsd:token"/>
+    </xsd:all>
+  </xsd:complexType>
+
+</xsd:schema>

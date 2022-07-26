@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<VdReconstructionSG
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:noNamespaceSchemaLocation="[SCHEMAPATH]/VdReconstructionSG.xsd">
+
+  <matchParamsPath>
+    /afs/cern.ch/user/a/amerzlay/public/XeLa150/VDmatchingfiles
+  </matchParamsPath>
+
+  <VdHitFinderPS>
+    <histogramsPath> VdHitFinderPS.root </histogramsPath>
+  </VdHitFinderPS>
+
+  <VdTrackFinderSG>
+    <doEventCuts> 0 </doEventCuts>
+    <histogramsPath> VdTrackFinderSG.root </histogramsPath>
+  </VdTrackFinderSG>
+
+</VdReconstructionSG>
